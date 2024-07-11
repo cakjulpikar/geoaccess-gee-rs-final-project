@@ -1,0 +1,161 @@
+// Dont forget to import and align the shp file
+
+var imgColl = ee
+  .ImageCollection("ECMWF/ERA5_LAND/DAILY_AGGR")
+  .select('temperature_2m')
+  .filterBounds(banten)
+  .filterDate('2022-01-01', '2023-12-31')
+  .map(function(image){
+    return image.subtract(273.15).copyProperties(image, ["system:time_start"]);
+  });
+
+print(imgColl);
+
+var tempMean = imgColl
+  .mean()
+  .clip(banten)
+
+var minMax = tempMean.reduceRegion({
+  geometry: banten,
+  reducer: ee.Reducer.minMax(),
+  scale: 11132,
+  maxPixels: 1e9
+});
+print(minMax);
+
+var tempTs = ui.Chart.image.series({
+  imageCollection: imgColl,
+  region: banten,
+  reducer:ee.Reducer.mean(),
+  scale: 11132,
+  xProperty: 'system:time_start'
+})
+.setOptions({
+     title: 'Air Temperature (C)',
+     vAxis: {title: 'Air temperature for each day'}
+});
+
+print(tempTs)
+
+var min = 21.0
+var max = 27.5
+var interval = 0.5
+
+var templatePalette = [
+  '000080', '0000d9', '4000ff', '8000ff', '0080ff', '00ffff',
+  '00ff80', '80ff00', 'daff00', 'ffff00', 'fff500', 'ffda00',
+  'ffb000'
+]
+
+var labelDesc = []
+
+for (var i = 0; i < templatePalette.length; i++) {
+  var lowLimit = min + (i * interval) 
+  var highLimit = min + ((i + 1) * interval)
+  
+  labelDesc.push(String(lowLimit) + ' - ' + String(highLimit))
+}
+
+var tempReclass = tempMean
+  .where(tempMean.gte(min).and(tempMean.lt(min + interval)), 1)
+  .where(tempMean.gte(min + interval).and(tempMean.lt(min + 2 * interval)), 2)
+  .where(tempMean.gte(min + 2 * interval).and(tempMean.lt(min + 3 * interval)), 3)
+  .where(tempMean.gte(min + 3 * interval).and(tempMean.lt(min + 4 * interval)), 4)
+  .where(tempMean.gte(min + 4 * interval).and(tempMean.lt(min + 5 * interval)), 5)
+  .where(tempMean.gte(min + 5 * interval).and(tempMean.lt(min + 6 * interval)), 6)
+  .where(tempMean.gte(min + 6 * interval).and(tempMean.lt(min + 7 * interval)), 7)
+  .where(tempMean.gte(min + 7 * interval).and(tempMean.lt(min + 8 * interval)), 8)
+  .where(tempMean.gte(min + 8 * interval).and(tempMean.lt(min + 9 * interval)), 9)
+  .where(tempMean.gte(min + 9 * interval).and(tempMean.lt(min + 10 * interval)), 10)
+  .where(tempMean.gte(min + 10 * interval).and(tempMean.lt(min + 11 * interval)), 11)
+  .where(tempMean.gte(min + 11 * interval).and(tempMean.lt(min + 12 * interval)), 12)
+  .where(tempMean.gte(min + 12 * interval).and(tempMean.lt(max)), 13);
+
+
+var tempClassParam = {
+  min: 1,
+  max: 13,
+  palette: templatePalette,
+  labels: labelDesc
+};
+
+var legendBox = ui.Panel({
+  style: {
+    position: 'bottom-left',
+    padding: '8px 15px'
+  }
+});
+
+var legendTitle = ui.Label({
+  value: 'Air Temp Classification',
+  style: {
+    fontWeight: 'bold',
+    fontSize: '16px',
+    margin: '0 0 4px 0',
+    padding: '0'
+  }
+});
+
+legendBox.add(legendTitle);
+
+var makeRow = function(color, name, area) {
+  var colorBox = ui.Label({
+    style: {
+      backgroundColor: color,
+      padding: '8px',
+      margin: '0 0 4px 0'
+    }
+  });
+
+  var description = ui.Label({
+    value: name,
+    style: {margin: '0 0 4px 6px'}
+  });
+
+  var areaDesc = ui.Label({
+    value: 'Total area: ' +  area + ' sq km',
+    style: {margin: '0 0 4px 6px'}
+  });
+
+  return ui.Panel({
+    widgets: [colorBox, description, areaDesc],
+    layout: ui.Panel.Layout.Flow('horizontal')
+  });
+};
+
+function calculateArea(classValue) {
+  var areaImage = ee.Image.pixelArea().mask(tempReclass.eq(classValue));
+  var area = areaImage.reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: banten,
+    scale: 11132,
+  });
+  var areaSqm = ee.Number(area.get('area'));
+  var areaSqkm = areaSqm.divide(1e6);
+  return areaSqkm;
+}
+
+var areaValues = [];
+
+for (var i = 0; i < 13; i++) {
+  var currVal = calculateArea(i + 1);
+  areaValues.push(currVal);
+}
+
+ee.List(areaValues).evaluate(function(areas) {
+  for (var i = 0; i < 13; i++) {
+    legendBox.add(makeRow(templatePalette[i], labelDesc[i], areas[i]));
+  }
+});
+
+Map.centerObject(banten);
+Map.addLayer(tempReclass, tempClassParam, 'Banten Air Temp Classification');
+Map.add(legendBox);
+
+Export.image.toDrive({
+  image: tempReclass,
+  description: 'Air_Temp_of_Banten',
+  scale: 11132,
+  region: banten,
+  fileFormat: 'GeoTIFF'
+});
